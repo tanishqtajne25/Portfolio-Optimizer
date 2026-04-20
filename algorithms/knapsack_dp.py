@@ -1,6 +1,5 @@
 import sys
 import os
-import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.fetch_stocks import get_stock_data
@@ -86,10 +85,14 @@ def knapsack_dp(metrics: dict, budget: float) -> dict:
             "breakdown"       : list of dicts per selected stock
         }
     """
-    tickers, weights, profits = prepare_items(metrics)
+    tickers = list(metrics.keys())
+    # Use ₹1000 budget units (floor) for tractable DP state size.
+    # This matches the intended coarse-capacity modeling in this project.
+    weights = [max(1, int(metrics[t]["price"] // WEIGHT_UNIT)) for t in tickers]
+    profits = [metrics[t]["expected_return"] for t in tickers]
     n = len(tickers)
 
-    # Convert budget to weight units (same normalization as stock prices)
+    # Capacity in ₹1000 units
     W = int(budget // WEIGHT_UNIT)
 
     if W <= 0:
@@ -98,42 +101,37 @@ def knapsack_dp(metrics: dict, budget: float) -> dict:
             "total_invested": 0.0, "remaining_budget": budget, "breakdown": []
         }
 
-    # ── 1D DP Array ───────────────────────────────────────────────────────────
-    # dp[w] = best total return achievable with a capacity of exactly w units.
-    # Initialize all to 0 — with zero budget, you can select nothing.
-    dp = [0.0] * (W + 1)
+    # ── 2D DP Table ───────────────────────────────────────────────────────────
+    # dp[i][w] = best return using first i items within capacity w.
+    # This keeps traceback exact and guarantees the reconstructed portfolio
+    # matches the reported optimum.
+    dp = [[0.0] * (W + 1) for _ in range(n + 1)]
 
-    # ── Traceback Table ───────────────────────────────────────────────────────
-    # selected[i][w] = True means: "when processing item i at capacity w,
-    #                               we chose to INCLUDE item i"
-    # This is a 2D boolean table — n rows × (W+1) columns.
-    # We need this separately because the 1D dp[] array is overwritten each iteration.
-    selected = [[False] * (W + 1) for _ in range(n)]
+    eps = 1e-12
 
-    for i in range(n):
-        wi = weights[i]   # weight of item i
-        pi = profits[i]   # profit of item i
-
-        # ── Right-to-left sweep (CRITICAL for 0/1 correctness) ────────────────
-        # If we swept left-to-right, we might pick the same item twice:
-        #   dp[w] = dp[w - wi] + pi, but dp[w - wi] may already include item i.
-        # Right-to-left guarantees dp[w - wi] still reflects the state BEFORE
-        # item i was considered.
-        for w in range(W, wi - 1, -1):
-            if dp[w - wi] + pi > dp[w]:
-                dp[w] = dp[w - wi] + pi
-                selected[i][w] = True   # record that we chose item i here
+    for i in range(1, n + 1):
+        wi = weights[i - 1]
+        pi = profits[i - 1]
+        for w in range(W + 1):
+            best_without = dp[i - 1][w]
+            if wi <= w:
+                best_with = dp[i - 1][w - wi] + pi
+                # Use epsilon-aware comparison to keep tie behavior stable.
+                if best_with > best_without + eps:
+                    dp[i][w] = best_with
+                else:
+                    dp[i][w] = best_without
+            else:
+                dp[i][w] = best_without
 
     # ── Traceback ─────────────────────────────────────────────────────────────
-    # Start from the maximum capacity W and walk backwards through items.
-    # If selected[i][w] is True, item i was included at capacity w,
-    # so subtract its weight and move to the previous item.
+    # Walk backwards and include item i-1 whenever dp value changes.
     chosen_tickers = []
     w = W
-    for i in range(n - 1, -1, -1):
-        if selected[i][w]:
-            chosen_tickers.append(tickers[i])
-            w -= weights[i]
+    for i in range(n, 0, -1):
+        if dp[i][w] > dp[i - 1][w] + eps:
+            chosen_tickers.append(tickers[i - 1])
+            w -= weights[i - 1]
 
     # ── Build result ──────────────────────────────────────────────────────────
     total_invested = 0.0

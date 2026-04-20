@@ -45,8 +45,8 @@ def compute_metrics(prices: pd.DataFrame) -> tuple:
     metrics = {}
     for col in prices.columns:
         metrics[col] = {
-            "expected_return": round(float(log_returns[col].mean() * 252), 6),
-            "risk":            round(float(log_returns[col].std() * np.sqrt(252)), 6),
+            "expected_return": float(log_returns[col].mean() * 252),
+            "risk":            float(log_returns[col].std() * np.sqrt(252)),
             "price":           round(float(prices[col].iloc[-1]), 2),
         }
 
